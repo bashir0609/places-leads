@@ -2,7 +2,7 @@
 FROM node:18-alpine AS frontend-build
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN npm install
 COPY frontend/ ./
 RUN REACT_APP_API_URL="" npm run build
 
