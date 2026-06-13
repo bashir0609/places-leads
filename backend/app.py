@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 from dotenv import load_dotenv
 from email_scraper import scrape_emails_from_websites
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from scraper import search_places
 
@@ -16,14 +16,17 @@ CORS(app)
 
 API_KEY = os.getenv("GOOGLE_PLACES_API_KEY")
 
+# Path to React build (served in production)
+# Default assumes repo layout: backend/app.py + frontend/build/
+# Override via FRONTEND_BUILD env var for Docker flat layouts
+_frontend_build = os.getenv(
+    "FRONTEND_BUILD",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "build"),
+)
+
 # In-memory job storage
 jobs = {}
 job_counter = 0
-
-
-@app.route("/", methods=["GET"])
-def index():
-    return jsonify({"status": "API is running", "version": "1.0.0"})
 
 
 @app.route("/health", methods=["GET"])
@@ -136,13 +139,14 @@ def export_csv(job_id):
         return jsonify({"error": "Job not found"}), 404
 
     csv_lines = [
-        "#,Business Name,Address,City,State,Postcode,Phone,Website,Maps,Domain"
+        "#,Business Name,Address,City,State,Postcode,Phone,Email,Website,Maps,Domain"
     ]
     for i, result in enumerate(job.get("results", []), 1):
         csv_lines.append(
             f'{i},"{result.get("name", "")}","{result.get("address", "")}",'
             f'"{result.get("city", "")}","{result.get("state", "")}",'
             f'"{result.get("postcode", "")}","{result.get("phone", "")}",'
+            f'"{result.get("email", "")}",'
             f'"{result.get("website", "")}","{result.get("maps_url", "")}",'
             f'"{result.get("domain", "")}"'
         )
@@ -158,6 +162,23 @@ def export_csv(job_id):
             "Content-Disposition": f"attachment; filename={filename}",
         },
     )
+
+
+@app.route("/", defaults={"path": ""}, methods=["GET"])
+@app.route("/<path:path>", methods=["GET"])
+def serve_react(path):
+    """Serve React build in production, fallback to API index if not built."""
+    if os.path.isdir(_frontend_build):
+        file_path = os.path.join(_frontend_build, path) if path else _frontend_build
+        if path and os.path.isfile(file_path):
+            return send_from_directory(_frontend_build, path)
+        return send_from_directory(_frontend_build, "index.html")
+    # Dev fallback: only root returns API status, otherwise 404
+    if not path:
+        return jsonify({"status": "API is running", "version": "1.0.0"})
+    return jsonify(
+        {"error": "Frontend not built. Run: cd frontend && npm run build"}
+    ), 404
 
 
 @app.errorhandler(404)

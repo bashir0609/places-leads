@@ -18,7 +18,7 @@ function App() {
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
-  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
+  const API_URL = process.env.REACT_APP_API_URL ?? "http://localhost:5001";
 
   const handleCountryChange = (newCountry, newState, newCity) => {
     setCountry(newCountry);
@@ -89,6 +89,7 @@ function App() {
       "Business Name",
       "Website",
       "Domain",
+      "Email",
       "Address",
       "City",
       "State",
@@ -101,6 +102,7 @@ function App() {
       r.name,
       r.website || "",
       r.domain || "",
+      r.email || "",
       r.address,
       r.city,
       r.state,
