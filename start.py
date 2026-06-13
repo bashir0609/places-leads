@@ -46,20 +46,33 @@ def run_frontend():
 def cleanup():
     print("\n🛑 Shutting down...")
     for p in processes:
+        if p.poll() is not None:
+            continue  # Already exited
         try:
             if sys.platform == "win32":
                 p.send_signal(signal.CTRL_BREAK_EVENT)
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait()
             else:
                 p.terminate()
-        except:
-            p.kill()
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait()
+        except Exception:
+            try:
+                p.kill()
+                p.wait()
+            except Exception:
+                pass
     print("Done!")
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, lambda s, f: cleanup())
-    signal.signal(signal.SIGTERM, lambda s, f: cleanup())
-
     print("=" * 50)
     print("🚀 Google Places Scraper")
     print("=" * 50)
@@ -77,7 +90,10 @@ if __name__ == "__main__":
     webbrowser.open("http://localhost:3000")
 
     try:
-        backend.wait()
-        frontend.wait()
+        while any(p.poll() is None for p in processes):
+            time.sleep(0.5)
     except KeyboardInterrupt:
+        pass
+    finally:
         cleanup()
+        sys.exit(0)

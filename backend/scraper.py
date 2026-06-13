@@ -32,8 +32,37 @@ QUERY_EXPANSIONS = [
     "{q} solutions",
 ]
 
+# Fields available from searchText (websiteUri and nationalPhoneNumber are NOT)
+SEARCH_FIELDS = (
+    "places.id,places.displayName,places.formattedAddress,"
+    "places.primaryType,places.primaryTypeDisplayName,places.types,nextPageToken"
+)
+
+# Fields to fetch from Place Details
+DETAILS_FIELDS = (
+    "id,displayName,formattedAddress,websiteUri,nationalPhoneNumber,googleMapsUri"
+)
+
+
+def _fetch_place_details(api_key, place_id):
+    """Fetch detailed info (website, phone) for a single place via Place Details."""
+    url = f"https://places.googleapis.com/v1/places/{place_id}"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": DETAILS_FIELDS,
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"      ⚠️  Details failed for {place_id}: {str(e)[:80]}")
+        return {}
+
 
 def _parse_place(place):
+    """Parse a place object (from search or details) into our result dict."""
     address = place.get("formattedAddress", "")
     raw_name = place.get("displayName", {}).get("text", "")
     clean_name = clean_business_name(raw_name)
@@ -62,12 +91,12 @@ def _parse_place(place):
 
 
 def _run_single_query(api_key, query, location, max_results):
-    """Run a single text query with pagination"""
+    """Run a single text query with pagination. Returns basic results (no website/phone)."""
     url = "https://places.googleapis.com/v1/places:searchText"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.websiteUri,places.nationalPhoneNumber,places.primaryType,places.primaryTypeDisplayName,places.types,nextPageToken",
+        "X-Goog-FieldMask": SEARCH_FIELDS,
     }
 
     results = []
@@ -91,9 +120,7 @@ def _run_single_query(api_key, query, location, max_results):
             if pid in seen_ids:
                 continue
             seen_ids.add(pid)
-            result = _parse_place(place)
-            if result and result["website"]:  # Only include results with websites
-                results.append(result)
+            results.append(_parse_place(place))
 
         page_token = data.get("nextPageToken")
         if not page_token:
@@ -103,12 +130,48 @@ def _run_single_query(api_key, query, location, max_results):
     return results
 
 
+def _enrich_results_with_details(api_key, results):
+    """Fetch Place Details for each result to get website and phone.
+    Updates results in-place and returns only those with a website."""
+    enriched = []
+    for i, place in enumerate(results):
+        pid = place.get("id")
+        if not pid:
+            continue
+
+        print(
+            f"      [{i + 1}/{len(results)}] Fetching details for {place['name'][:40]}..."
+        )
+        details = _fetch_place_details(api_key, pid)
+        if details:
+            # Merge detail fields into the existing result
+            website = clean_url(details.get("websiteUri", ""))
+            place["website"] = website or place.get("website", "")
+            place["domain"] = get_root_domain(place["website"]) or place.get(
+                "domain", ""
+            )
+            place["phone"] = details.get("nationalPhoneNumber") or place.get(
+                "phone", ""
+            )
+
+        if place.get("website"):
+            enriched.append(place)
+        else:
+            print("        ⛔ No website — skipped")
+
+        time.sleep(0.2)  # Gentle rate limiting for Place Details calls
+
+    return enriched
+
+
 def search_places(api_key, query, location, limit=50, cities=None, state_code=None):
-    """Search with multiple keywords, multi-city, and query expansions."""
+    """Search with multiple keywords, multi-city, and query expansions.
+    Enriches results with Place Details (website + phone) after search."""
     keywords = [k.strip() for k in query.split(",") if k.strip()]
     city_list = cities if cities else [location.split()[0]]
     st = state_code or state_from_location(location)
 
+    # --- Step 1: Search for places ---
     if len(keywords) > 1 or len(city_list) > 1:
         all_results = []
         seen_ids = set()
@@ -136,12 +199,25 @@ def search_places(api_key, query, location, limit=50, cities=None, state_code=No
             if len(all_results) >= limit:
                 break
 
-        print(f"✅ Done: {len(all_results)} total")
-        return all_results[:limit]
+        print(f"✅ Step 1 done: {len(all_results)} places found")
 
-    # Single keyword, single city — use expansions directly
+        # --- Step 2: Enrich with Place Details ---
+        print(
+            f"🔎 Step 2: Fetching details (website + phone) for {len(all_results)} places…"
+        )
+        enriched = _enrich_results_with_details(api_key, all_results)
+        print(f"✅ Step 2 done: {len(enriched)} places with websites")
+        return enriched[:limit]
+
+    # Single keyword, single city
     seen = set()
-    return _search_with_expansions(api_key, keywords[0], location, limit, seen)
+    basic_results = _search_with_expansions(api_key, keywords[0], location, limit, seen)
+    print(f"✅ Step 1 done: {len(basic_results)} places found")
+
+    print(f"🔎 Step 2: Fetching details for {len(basic_results)} places…")
+    enriched = _enrich_results_with_details(api_key, basic_results)
+    print(f"✅ Step 2 done: {len(enriched)} places with websites")
+    return enriched[:limit]
 
 
 def state_from_location(location):
