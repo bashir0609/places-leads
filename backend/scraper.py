@@ -207,7 +207,7 @@ def search_places(api_key, query, location, limit=50, cities=None, state_code=No
         )
         enriched = _enrich_results_with_details(api_key, all_results)
         print(f"✅ Step 2 done: {len(enriched)} places with websites")
-        return enriched[:limit]
+        return _dedupe_by_domain(enriched, limit)
 
     # Single keyword, single city
     seen = set()
@@ -217,12 +217,27 @@ def search_places(api_key, query, location, limit=50, cities=None, state_code=No
     print(f"🔎 Step 2: Fetching details for {len(basic_results)} places…")
     enriched = _enrich_results_with_details(api_key, basic_results)
     print(f"✅ Step 2 done: {len(enriched)} places with websites")
-    return enriched[:limit]
+    return _dedupe_by_domain(enriched, limit)
 
 
 def state_from_location(location):
     """Extract state code from location string like 'NSW (all cities)'"""
     return location.split()[0]
+
+
+def _dedupe_by_domain(results, limit):
+    """Remove duplicates by domain (first occurrence wins).
+    Results without a domain are kept as-is."""
+    seen = set()
+    final = []
+    for p in results:
+        d = p.get("domain", "")
+        if d:
+            if d in seen:
+                continue
+            seen.add(d)
+        final.append(p)
+    return final[:limit]
 
 
 def _search_with_expansions(
